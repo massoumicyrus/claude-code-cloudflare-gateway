@@ -1,0 +1,15 @@
+name = "claude-code-cloudflare-gateway"
+main = "src/worker.js"
+compatibility_date = "2026-03-24"
+
+# Set these as secrets, not vars:
+#   wrangler secret put CF_ACCOUNT_ID
+#   wrangler secret put CF_API_TOKEN
+#   wrangler secret put SHIM_TOKEN
+#   wrangler secret put AIG_RUN_TOKEN     # optional
+[vars]
+AIG_GATEWAY_ID = "default"
+DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.7-code"
+
+[observability]
+enabled = true
