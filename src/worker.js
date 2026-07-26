@@ -428,6 +428,10 @@ async function handle(request, env) {
   // strip an optional leading token segment: /<SHIM_TOKEN>/v1/messages -> /v1/messages
   const tail = url.pathname.replace(/^\/[^/]*(?=\/v1\/)/, '');
 
+  // Nothing here answers without the token, including the discovery list: an unauthenticated
+  // reader should not learn which models this account routes or that the route exists.
+  if (!authorized(env, request, url)) return apiError('unauthorized', 401, 'authentication_error');
+
   if (request.method === 'GET' || request.method === 'HEAD') {
     if (/\/v1\/models/.test(tail)) return json(modelCatalogue());
     return json({
@@ -438,7 +442,6 @@ async function handle(request, env) {
     });
   }
   if (request.method !== 'POST') return apiError('POST only', 405);
-  if (!authorized(env, request, url)) return apiError('unauthorized', 401, 'authentication_error');
   if (!env.CF_ACCOUNT_ID) return apiError('CF_ACCOUNT_ID missing', 500, 'api_error');
 
   let body;
