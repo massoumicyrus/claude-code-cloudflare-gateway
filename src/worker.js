@@ -47,9 +47,6 @@ const ALIASES = {
   grok: 'xai/grok-4.5',
   gpt: 'openai/gpt-5.5',
   minimax: 'minimax/m3',
-  'claude-minimax-m3': 'minimax/m3',
-  'claude-opus-5': 'anthropic/claude-opus-5',
-  'claude-sonnet-5': 'anthropic/claude-sonnet-5',
   opus5: 'anthropic/claude-opus-5',
   sonnet5: 'anthropic/claude-sonnet-5',
 };
@@ -73,25 +70,29 @@ function resolveModel(raw, env) {
   return fallback;
 }
 
-// The client's model discovery drops any id that does not start with claude/anthropic,
-// so every alias is published under a Claude-shaped name. Picking one in /model routes to
-// the underlying model here; the display name says what it really is.
+// The client's model discovery drops any id that does not start with claude/anthropic, so
+// every alias is also published under a Claude-shaped name. One table drives both the
+// alias map and the published list: a published id can never resolve to another model.
+const CATALOGUE = [
+  ['claude-kimi-k2.7-code', '@cf/moonshotai/kimi-k2.7-code', 'Kimi K2.7 Code (Workers AI, 262k)'],
+  ['claude-kimi-k2.6', '@cf/moonshotai/kimi-k2.6', 'Kimi K2.6 (Workers AI, 262k)'],
+  ['claude-kimi-k3', 'moonshotai/kimi-k3', 'Kimi K3 (catalogue, 1M)'],
+  ['claude-glm-5.2', '@cf/zai-org/glm-5.2', 'GLM-5.2 (Workers AI, 262k)'],
+  ['claude-glm-flash', '@cf/zai-org/glm-4.7-flash', 'GLM-4.7 Flash (Workers AI, cheapest)'],
+  ['claude-grok-4.5', 'xai/grok-4.5', 'Grok 4.5 (catalogue)'],
+  ['claude-minimax-m3', 'minimax/m3', 'MiniMax M3 (catalogue)'],
+  ['claude-opus-5', 'anthropic/claude-opus-5', 'Claude Opus 5 (native lane)'],
+  ['claude-sonnet-5', 'anthropic/claude-sonnet-5', 'Claude Sonnet 5 (native lane)'],
+];
+
+for (const [id, target] of CATALOGUE) ALIASES[id] = target;
+
 function modelCatalogue() {
-  const rows = [
-    ['claude-kimi-k2.7-code', 'Kimi K2.7 Code (Workers AI, 262k)'],
-    ['claude-kimi-k3', 'Kimi K3 (catalogue, 1M)'],
-    ['claude-glm-5.2', 'GLM-5.2 (Workers AI, 262k)'],
-    ['claude-glm-flash', 'GLM-4.7 Flash (Workers AI, cheapest)'],
-    ['claude-grok-4.5', 'Grok 4.5 (catalogue)'],
-    ['claude-minimax-m3', 'MiniMax M3 (catalogue)'],
-    ['claude-opus-5', 'Claude Opus 5 (native lane)'],
-    ['claude-sonnet-5', 'Claude Sonnet 5 (native lane)'],
-  ];
   return {
-    data: rows.map(([id, name]) => ({ type: 'model', id, display_name: name, created_at: '2026-07-25T00:00:00Z' })),
+    data: CATALOGUE.map(([id, , name]) => ({ type: 'model', id, display_name: name, created_at: '2026-07-25T00:00:00Z' })),
     has_more: false,
-    first_id: rows[0][0],
-    last_id: rows[rows.length - 1][0],
+    first_id: CATALOGUE[0][0],
+    last_id: CATALOGUE[CATALOGUE.length - 1][0],
   };
 }
 
