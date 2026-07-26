@@ -143,6 +143,35 @@ Seven things, each of which is a real bug in some published shim:
    positional, and a merged block starting with that header swallows the rest of your
    system prompt.
 
+## Verify a deployment
+
+```bash
+node tools/contract-test.mjs https://<worker-host>/<SHIM_TOKEN> kimi
+```
+
+21 checks over the parts the CLI actually depends on: the Anthropic envelope, usage and
+stop-reason mapping, the full SSE event sequence in order, a streamed `tool_use` block whose
+arguments arrive as `input_json_delta` and parse to valid JSON, a `tool_result` second turn
+the model reads, `count_tokens`, the model list, and that a wrong token is refused. Every
+check passes on the reference deployment as of 2026-07-25.
+
+## What else it serves
+
+- **`GET /v1/models`** — the alias list in the shape gateway model discovery accepts. That
+  discovery is off by default (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, CLI ≥ 2.1.129),
+  times out at three seconds, treats any redirect as failure, and **drops every id that does
+  not start with `claude` or `anthropic`** — which is why the ids here are `claude-kimi-k2.7-code`,
+  `claude-glm-5.2` and so on, with the real model in `display_name`.
+- **Images.** `image` blocks are forwarded as OpenAI `image_url` parts, base64 or URL. Verified:
+  an 8×8 blue PNG pasted through the CLI came back "Blue" from `@cf/moonshotai/kimi-k2.7-code`.
+- **Per-session cost attribution.** `cf-aig-metadata` carries the CLI's
+  `x-claude-code-session-id`, `x-claude-code-agent-id` and parent agent id, plus the model you
+  asked for and the tool count, so the gateway's cost view is filterable per session and per
+  subagent instead of one blur.
+- **Gateway-side retries.** `cf-aig-max-attempts: 3` with exponential backoff, because the
+  client's own retry logic matches on Anthropic's error wording and will not fire for an
+  upstream that phrases failures differently.
+
 ## Wire capture tool
 
 `tools/capture-gateway.mjs` is a local Anthropic-compatible server that logs exactly what
@@ -159,7 +188,6 @@ ANTHROPIC_BASE_URL=http://localhost:8787 ANTHROPIC_AUTH_TOKEN=x claude -p "say o
 - Anthropic "doesn't endorse, maintain, or audit third-party gateway products, and doesn't
   support routing Claude Code to non-Claude models through any gateway." Nothing forbids
   it; you are the one who keeps up when the client changes.
-- Images are not forwarded to chat-completions models (a placeholder is sent instead).
 - `thinking` is dropped rather than translated. That is deliberate — the client sends
   `thinking: {"type":"adaptive"}` and many backends 400, empty out or hang on it.
 - Prompt caching is whatever the upstream does. `cache_control` breakpoints are not

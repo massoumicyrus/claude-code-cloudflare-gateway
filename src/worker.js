@@ -16,11 +16,14 @@
 //   1. anthropic/* -> POST /ai/v1/messages, Anthropic's own schema, body passed through.
 //   2. everything else -> POST /ai/v1/chat/completions, translated in both directions.
 //
+// Also served: /v1/messages/count_tokens (estimate) and /v1/models (Claude-shaped alias
+// ids, the only shape the client's gateway model discovery accepts).
+//
 // Workers AI models (@cf/...) bill as Workers AI; catalogue models (moonshotai/, xai/,
 // anthropic/, openai/, minimax/) bill through Unified Billing credits. Neither needs a
 // provider key in the client. Unified Billing requires an AUTHENTICATED gateway.
 //
-// Required bindings (wrangler secret put):
+// Required secrets (wrangler secret put):
 //   CF_ACCOUNT_ID      your Cloudflare account id
 //   CF_API_TOKEN       API token with Workers AI Read/Run + AI Gateway Run
 //   SHIM_TOKEN         a random string; it is the path segment and the client's bearer
@@ -32,7 +35,7 @@
 const GATEWAY = 'default'; // authenticated gateway; override with AIG_GATEWAY_ID
 
 // Short names the CLI can put in ANTHROPIC_MODEL. Verified against the Cloudflare
-// catalogue on 2026-07-25 -- check https://developers.cloudflare.com/ai/models/ for ids.
+// catalogue on 2026-07-25 -- see https://developers.cloudflare.com/ai/models/ for ids.
 const ALIASES = {
   kimi: '@cf/moonshotai/kimi-k2.7-code',
   'kimi-k2.7-code': '@cf/moonshotai/kimi-k2.7-code',
@@ -44,6 +47,9 @@ const ALIASES = {
   grok: 'xai/grok-4.5',
   gpt: 'openai/gpt-5.5',
   minimax: 'minimax/m3',
+  'claude-minimax-m3': 'minimax/m3',
+  'claude-opus-5': 'anthropic/claude-opus-5',
+  'claude-sonnet-5': 'anthropic/claude-sonnet-5',
   opus5: 'anthropic/claude-opus-5',
   sonnet5: 'anthropic/claude-sonnet-5',
 };
@@ -65,6 +71,28 @@ function resolveModel(raw, env) {
   if (low.includes('grok')) return ALIASES.grok;
   if (low.includes('gpt')) return ALIASES.gpt;
   return fallback;
+}
+
+// The client's model discovery drops any id that does not start with claude/anthropic,
+// so every alias is published under a Claude-shaped name. Picking one in /model routes to
+// the underlying model here; the display name says what it really is.
+function modelCatalogue() {
+  const rows = [
+    ['claude-kimi-k2.7-code', 'Kimi K2.7 Code (Workers AI, 262k)'],
+    ['claude-kimi-k3', 'Kimi K3 (catalogue, 1M)'],
+    ['claude-glm-5.2', 'GLM-5.2 (Workers AI, 262k)'],
+    ['claude-glm-flash', 'GLM-4.7 Flash (Workers AI, cheapest)'],
+    ['claude-grok-4.5', 'Grok 4.5 (catalogue)'],
+    ['claude-minimax-m3', 'MiniMax M3 (catalogue)'],
+    ['claude-opus-5', 'Claude Opus 5 (native lane)'],
+    ['claude-sonnet-5', 'Claude Sonnet 5 (native lane)'],
+  ];
+  return {
+    data: rows.map(([id, name]) => ({ type: 'model', id, display_name: name, created_at: '2026-07-25T00:00:00Z' })),
+    has_more: false,
+    first_id: rows[0][0],
+    last_id: rows[rows.length - 1][0],
+  };
 }
 
 function aiBase(env) {
@@ -157,7 +185,9 @@ function toOpenAIMessages(body) {
       continue;
     }
 
-    // user turn: tool results first, then whatever the human/harness said.
+    // user turn: tool results first, then whatever the human/harness said. Images become
+    // OpenAI image_url parts -- Kimi K2.7 Code and GLM both accept vision input, so a
+    // screenshot pasted into the CLI reaches the model instead of being dropped.
     const userParts = [];
     for (const b of content) {
       if (!b) continue;
@@ -168,16 +198,20 @@ function toOpenAIMessages(body) {
           content: stringifyToolResult(b.content) || '(no output)',
         });
       } else if (b.type === 'text') {
-        userParts.push(b.text || '');
+        if (b.text) userParts.push({ type: 'text', text: b.text });
       } else if (b.type === 'image') {
         const src = b.source || {};
         if (src.type === 'base64' && src.data) {
-          userParts.push('[image: ' + (src.media_type || 'image') + ', omitted]');
+          userParts.push({ type: 'image_url', image_url: { url: 'data:' + (src.media_type || 'image/png') + ';base64,' + src.data } });
+        } else if (src.type === 'url' && src.url) {
+          userParts.push({ type: 'image_url', image_url: { url: src.url } });
         }
       }
     }
-    const userText = userParts.filter(Boolean).join('\n');
-    if (userText) out.push({ role: 'user', content: userText });
+    if (userParts.length) {
+      const onlyText = userParts.every((p) => p.type === 'text');
+      out.push({ role: 'user', content: onlyText ? userParts.map((p) => p.text).join('\n') : userParts });
+    }
   }
   return out;
 }
@@ -395,6 +429,7 @@ async function handle(request, env) {
   const tail = url.pathname.replace(/^\/[^/]*(?=\/v1\/)/, '');
 
   if (request.method === 'GET' || request.method === 'HEAD') {
+    if (/\/v1\/models/.test(tail)) return json(modelCatalogue());
     return json({
       ok: true,
       endpoint: 'anthropic-messages -> cloudflare ai gateway (' + (env.AIG_GATEWAY_ID || GATEWAY) + ')',
@@ -410,9 +445,22 @@ async function handle(request, env) {
   try { body = await request.json(); } catch { return apiError('body must be JSON'); }
 
   if (/count_tokens/.test(tail)) {
-    const approx = JSON.stringify(body).length;
-    return json({ input_tokens: Math.ceil(approx / 4) });
+    // Optional endpoint: without it the client estimates locally. A cheap character-based
+    // count over the parts that actually cost tokens beats a 404 and beats counting the
+    // JSON envelope, which inflates by roughly a third on a tool-heavy request.
+    let chars = systemText(body.system).length;
+    for (const m of toOpenAIMessages(body)) {
+      chars += typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length;
+      if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
+    }
+    for (const t of toOpenAITools(body.tools) || []) chars += JSON.stringify(t).length;
+    return json({ input_tokens: Math.ceil(chars / 3.7) });
   }
+
+  // Model discovery: the client asks GET/POST /v1/models with a 3-second timeout and
+  // ignores every id that does not begin with claude or anthropic, so the aliases are
+  // published Claude-shaped. Turn it on with CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1.
+  if (/\/v1\/models/.test(tail)) return json(modelCatalogue());
   if (!/\/v1\/messages/.test(tail)) return apiError('unknown path: ' + tail, 404, 'not_found_error');
 
   const model = resolveModel(body.model, env);
@@ -425,7 +473,22 @@ async function handle(request, env) {
     'content-type': 'application/json',
     authorization: 'Bearer ' + token,
     'cf-aig-gateway-id': env.AIG_GATEWAY_ID || GATEWAY,
-    'cf-aig-metadata': JSON.stringify({ via: 'claude-code', shim: 'claude-code-cloudflare-gateway' }),
+    'cf-aig-metadata': JSON.stringify({
+      via: 'claude-code',
+      shim: 'claude-code-cloudflare-gateway',
+      model_asked: String(body.model || ''),
+      // The CLI labels its own subagents; forwarding the ids makes the gateway's cost
+      // and latency views filterable per session and per agent instead of one blur.
+      session: request.headers.get('x-claude-code-session-id') || undefined,
+      agent: request.headers.get('x-claude-code-agent-id') || undefined,
+      parent_agent: request.headers.get('x-claude-code-parent-agent-id') || undefined,
+      tools: Array.isArray(body.tools) ? body.tools.length : 0,
+    }),
+    // Retry transient upstream failures at the gateway rather than surfacing them to the
+    // client, whose own retry logic matches on Anthropic's error wording.
+    'cf-aig-max-attempts': '3',
+    'cf-aig-retry-delay': '600',
+    'cf-aig-backoff': 'exponential',
   };
   if (env.AIG_RUN_TOKEN) headers['cf-aig-authorization'] = 'Bearer ' + env.AIG_RUN_TOKEN;
 
