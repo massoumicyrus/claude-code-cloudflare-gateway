@@ -201,6 +201,27 @@ node tools/capture-gateway.mjs   # listens on :8787, appends ./capture.jsonl (ov
 ANTHROPIC_BASE_URL=http://localhost:8787 ANTHROPIC_AUTH_TOKEN=x claude -p "say ok"
 ```
 
+## Reproducible three-way benchmark contract
+
+`tools/benchmark.mjs` is the scorer and artifact writer used by the V2 comparison. It refuses a
+run if the per-row MCP, deferred Tool Search and protocol-only trials differ on model, gateway,
+catalogue snapshot or environment hash. A trial passes only when its final value is correct and
+every task-required lifecycle event occurred; a plausible final answer without the required
+resolve/invoke/receipt path fails.
+
+Adapters receive one bounded JSON request on stdin and return one JSON result. The harness writes
+raw `trials.jsonl`, machine-readable `summary.json` and human-readable `summary.md`, including
+full-task success, calls, latency, input/output tokens and cost supplied by the adapter. Its cost
+wording treats deferred Tool Search and protocol-only as effectively equal when their mean cost is
+within 5%; it does not turn a rounding difference into a winner.
+
+```bash
+node --test tools/benchmark.test.mjs
+```
+
+The fixed tasks, real-model adapter and release results live with the portable catalogue runtime
+so they can exercise create, resolve, invoke, receipt, replay and repair on a clean local install.
+
 ## Known limits
 
 - Anthropic "doesn't endorse, maintain, or audit third-party gateway products, and doesn't
