@@ -87,6 +87,12 @@ const CATALOGUE = [
 
 for (const [id, target] of CATALOGUE) ALIASES[id] = target;
 
+// Slot names that pass every client-side model-name check, including the desktop app's
+// allowlist and the Agent SDK's. They are real Anthropic ids used as labels for the slots;
+// what actually runs is on the right. Documented so nobody mistakes the label for the model.
+ALIASES['claude-sonnet-4-5'] = '@cf/moonshotai/kimi-k2.7-code';
+ALIASES['claude-haiku-4-5'] = '@cf/zai-org/glm-4.7-flash';
+
 function modelCatalogue() {
   return {
     data: CATALOGUE.map(([id, , name]) => ({ type: 'model', id, display_name: name, created_at: '2026-07-25T00:00:00Z' })),

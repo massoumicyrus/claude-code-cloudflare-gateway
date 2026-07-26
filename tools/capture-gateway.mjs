@@ -3,7 +3,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 
-const LOG = '/private/tmp/claude-501/-Users-cyrusmassoumi/5f492084-40b3-41e1-a413-7ead82d7eba6/scratchpad/capture.jsonl';
+const LOG = process.env.CAPTURE_LOG || 'capture.jsonl';
 const PORT = 8787;
 
 http.createServer((req, res) => {
@@ -31,7 +31,11 @@ http.createServer((req, res) => {
       temperature: body?.temperature,
       first_user_text: JSON.stringify(body?.messages?.[0]?.content)?.slice(0, 200),
     };
-    fs.appendFileSync(LOG, JSON.stringify(rec) + '\n');
+    try {
+      fs.appendFileSync(LOG, JSON.stringify(rec) + '\n');
+    } catch (err) {
+      console.error('capture: could not append to ' + LOG + ': ' + err.message);
+    }
 
     if (req.url.includes('count_tokens')) {
       res.writeHead(200, { 'content-type': 'application/json' });

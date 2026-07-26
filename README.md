@@ -1,6 +1,6 @@
 # Claude Code on the Cloudflare AI Gateway
 
-Run the Claude Code CLI against Kimi, GLM, Grok, MiniMax, DeepSeek or Claude, with every
+Run the Claude Code CLI against Kimi, GLM, Grok, MiniMax or Claude, with every
 request going through **your own Cloudflare account** — one bill, one log, no provider API
 keys in your shell.
 
@@ -36,12 +36,22 @@ working, which reads like a model problem and is a gateway setting.
 ```bash
 git clone https://github.com/massoumicyrus/claude-code-cloudflare-gateway
 cd claude-code-cloudflare-gateway
+npx wrangler deploy                       # creates the Worker; secrets need it to exist
 npx wrangler secret put CF_ACCOUNT_ID     # your account id
 npx wrangler secret put CF_API_TOKEN      # the token from step 1
 npx wrangler secret put SHIM_TOKEN        # any random string, e.g. openssl rand -base64 24
 npx wrangler secret put AIG_RUN_TOKEN     # optional: gateway Run token for cf-aig-authorization
-npx wrangler deploy
 ```
+
+Deploy first. `wrangler secret put` against a Worker that does not exist yet prompts to
+create one interactively and fails outright in a non-interactive shell.
+
+Two more optional secrets the Worker reads:
+
+| Secret | What it does | Default |
+| --- | --- | --- |
+| `AIG_GATEWAY_ID` | Which AI Gateway the requests are logged and billed through. Must be an authenticated gateway for Unified Billing models to work. | `default` |
+| `DEFAULT_MODEL` | The model any unresolved slot falls back to — an empty `model`, or a Claude-shaped name that matches no alias and no keyword. | `@cf/moonshotai/kimi-k2.7-code` |
 
 **4. Point the CLI at it.**
 
@@ -114,7 +124,8 @@ Both measured through one gateway with a 856-tool MCP server attached:
 | --- | --- | --- | --- |
 | MCP attached, no tool search | 149,187 | 64 | $0.02852109 |
 | MCP attached, `ENABLE_TOOL_SEARCH=true` | 14,109 | 12,480 | $0.00443075 |
-| No MCP server at all | 21,928 | 13,312 | $0.01089448 |
+| MCP server disabled mid-session | 21,928 | 13,312 | $0.01089448 |
+| Protocol only, no MCP server | 14,071 | — | $0.00456265 |
 
 - **`ENABLE_TOOL_SEARCH=true`** drops the request from 856 tool definitions to 9 plus a
   `ToolSearch` tool the model calls on demand. Verified end to end: Kimi searched for an
@@ -145,15 +156,22 @@ Seven things, each of which is a real bug in some published shim:
 
 ## Verify a deployment
 
+Requires Node 18 or newer.
+
 ```bash
 node tools/contract-test.mjs https://<worker-host>/<SHIM_TOKEN> kimi
 ```
 
-21 checks over the parts the CLI actually depends on: the Anthropic envelope, usage and
-stop-reason mapping, the full SSE event sequence in order, a streamed `tool_use` block whose
-arguments arrive as `input_json_delta` and parse to valid JSON, a `tool_result` second turn
-the model reads, `count_tokens`, the model list, and that a wrong token is refused. Every
-check passes on the reference deployment as of 2026-07-25.
+42 checks over the parts the CLI actually depends on: the Anthropic envelope, usage and
+stop-reason mapping, the full SSE event sequence in order with every content block closed
+before `message_delta` and `usage.output_tokens` on it, a streamed `tool_use` block whose
+arguments arrive as `input_json_delta` and parse to valid JSON, the same tool call
+non-streamed, a `tool_result` second turn the model reads, `count_tokens`, the model list
+with every published id actually resolving to the model its `display_name` names, that a
+wrong token and an unauthenticated `GET /v1/models` are both refused while `x-api-key` and
+`Authorization: Bearer` both work, and the error statuses (400 on a non-JSON body, 404 on an
+unknown path, 405 on `PUT`/`DELETE`). Every check passes on the reference deployment as of
+2026-07-25.
 
 ## What else it serves
 
@@ -179,7 +197,7 @@ the client sends and answers with a valid response, so you can re-derive all of 
 newer CLI version instead of trusting this README:
 
 ```bash
-node tools/capture-gateway.mjs   # listens on :8787, appends capture.jsonl
+node tools/capture-gateway.mjs   # listens on :8787, appends ./capture.jsonl (override with CAPTURE_LOG)
 ANTHROPIC_BASE_URL=http://localhost:8787 ANTHROPIC_AUTH_TOKEN=x claude -p "say ok"
 ```
 
